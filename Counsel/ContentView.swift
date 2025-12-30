@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+import SwiftData
+import CryptoKit
+import UIKit
 
 // MARK: - Models
 
@@ -25,21 +28,70 @@ struct ReflectionItem: Identifiable, Hashable {
     let supportingHistoryIDs: [UUID]
 }
 
-// MARK: - Store
+/// A normalized input to the Plan screen, so we can plan from:
+/// - an Advisor response
+/// - a Reflection
+private struct PlanInput: Hashable {
+    let title: String
+    let summary: String
+    let bullets: [String]
+}
+
+// MARK: - Store (History persisted, reflections derived)
 
 @MainActor
 final class AppStore: ObservableObject {
     @Published var history: [HistoryItem] = []
     @Published var reflections: [ReflectionItem] = []
 
-    /// The single entry point for anything the user submits (typed today, voice tomorrow).
+    private var context: ModelContext?
+    private var didLoad = false
+
+    func setContextIfNeeded(_ context: ModelContext) {
+        self.context = context
+        guard !didLoad else { return }
+        didLoad = true
+        loadPersistedData()
+    }
+
+    private func loadPersistedData() {
+        guard let context else { return }
+
+        do {
+            let historyRecords = try context.fetch(
+                FetchDescriptor<HistoryRecord>(
+                    sortBy: [SortDescriptor<HistoryRecord>(\.createdAt, order: .reverse)]
+                )
+            )
+
+            self.history = historyRecords.map { rec in
+                HistoryItem(
+                    id: rec.id,
+                    createdAt: rec.createdAt,
+                    title: rec.title,
+                    model: AdvisorResponseModel(
+                        summary: rec.summary,
+                        organized: rec.organized,
+                        nextStepPrompt: rec.nextStepPrompt,
+                        memorySnippet: rec.memorySnippet
+                    )
+                )
+            }
+
+            rebuildReflections()
+        } catch {
+            print("SwiftData load failed:", error)
+        }
+    }
+
     func recordInteraction(input: String, model: AdvisorResponseModel) {
         addHistory(input: input, model: model)
-        maybeGenerateReflection()
+        rebuildReflections()
     }
 
     func addHistory(input: String, model: AdvisorResponseModel) {
         let title = AppStore.makeTitle(from: input)
+
         let item = HistoryItem(
             id: UUID(),
             createdAt: Date(),
@@ -47,37 +99,112 @@ final class AppStore: ObservableObject {
             model: model
         )
         history.insert(item, at: 0)
+
+        guard let context else { return }
+        let record = HistoryRecord(
+            id: item.id,
+            createdAt: item.createdAt,
+            title: item.title,
+            summary: model.summary,
+            organized: model.organized,
+            nextStepPrompt: model.nextStepPrompt,
+            memorySnippet: model.memorySnippet
+        )
+        context.insert(record)
+        try? context.save()
     }
 
-    private func maybeGenerateReflection() {
-        // Need enough signal to avoid junk reflections.
-        guard history.count >= 3 else { return }
+    func clearAllData() {
+        guard let context else { return }
+        do {
+            let histories = try context.fetch(FetchDescriptor<HistoryRecord>())
+            histories.forEach { context.delete($0) }
+            try context.save()
+        } catch {
+            print("Clear failed:", error)
+        }
 
-        let cadence: ReflectionCadence = (reflections.count < 7) ? .daily : .weekly
-        guard shouldCreateReflection(cadence: cadence) else { return }
-
-        let recent = Array(history.prefix(8))
-        let reflection = ReflectionEngine.generate(from: recent)
-        reflections.insert(reflection, at: 0)
+        history = []
+        reflections = []
     }
 
-    private enum ReflectionCadence { case daily, weekly }
+    // MARK: - Derived reflections
 
-    private func shouldCreateReflection(cadence: ReflectionCadence) -> Bool {
-        guard let last = reflections.first?.createdAt else { return true }
+    private struct WeekKey: Hashable { let year: Int; let week: Int }
+
+    private func rebuildReflections() {
+        let distinctDays = Set(history.map { Calendar.current.startOfDay(for: $0.createdAt) })
+        let useWeekly = distinctDays.count >= 7
+
+        let groups: [(key: String, sortDate: Date, items: [HistoryItem])] = useWeekly
+        ? groupByWeek(history)
+        : groupByDay(history)
+
+        let rebuilt: [ReflectionItem] = groups
+            .sorted { $0.sortDate > $1.sortDate }
+            .map { g in
+                let recent = Array(g.items.sorted { $0.createdAt > $1.createdAt }.prefix(8))
+                let base = ReflectionEngine.generate(from: recent)
+
+                // Stable id per group, so list animations/navigation stay sane.
+                let id = stableUUID(seed: "reflection-\(g.key)")
+                let createdAt = g.items.map(\.createdAt).max() ?? g.sortDate
+
+                return ReflectionItem(
+                    id: id,
+                    createdAt: createdAt,
+                    title: base.title,
+                    insight: base.insight,
+                    supportingHistoryIDs: base.supportingHistoryIDs
+                )
+            }
+
+        reflections = rebuilt
+    }
+
+    private func groupByDay(_ items: [HistoryItem]) -> [(key: String, sortDate: Date, items: [HistoryItem])] {
         let cal = Calendar.current
-
-        switch cadence {
-        case .daily:
-            return !cal.isDate(last, inSameDayAs: Date())
-        case .weekly:
-            let lastWeek = cal.component(.weekOfYear, from: last)
-            let nowWeek = cal.component(.weekOfYear, from: Date())
-            let lastYear = cal.component(.yearForWeekOfYear, from: last)
-            let nowYear = cal.component(.yearForWeekOfYear, from: Date())
-            return (lastWeek != nowWeek) || (lastYear != nowYear)
+        let buckets = Dictionary(grouping: items) { cal.startOfDay(for: $0.createdAt) }
+        return buckets.map { day, items in
+            (key: isoDayKey(day), sortDate: day, items: items)
         }
     }
+
+    private func groupByWeek(_ items: [HistoryItem]) -> [(key: String, sortDate: Date, items: [HistoryItem])] {
+        let cal = Calendar.current
+        let buckets = Dictionary(grouping: items) { item in
+            let year = cal.component(.yearForWeekOfYear, from: item.createdAt)
+            let week = cal.component(.weekOfYear, from: item.createdAt)
+            return WeekKey(year: year, week: week)
+        }
+
+        return buckets.map { key, items in
+            let sortDate = items.map(\.createdAt).max() ?? Date()
+            return (key: "\(key.year)-W\(key.week)", sortDate: sortDate, items: items)
+        }
+    }
+
+    private func isoDayKey(_ date: Date) -> String {
+        let cal = Calendar(identifier: .iso8601)
+        let y = cal.component(.year, from: date)
+        let m = cal.component(.month, from: date)
+        let d = cal.component(.day, from: date)
+        return String(format: "%04d-%02d-%02d", y, m, d)
+    }
+
+    private func stableUUID(seed: String) -> UUID {
+        let data = Data(seed.utf8)
+        let hash = SHA256.hash(data: data)
+        let bytes = Array(hash.prefix(16))
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    // MARK: - Helpers
 
     private static func makeTitle(from input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,23 +220,24 @@ final class AppStore: ObservableObject {
     }
 }
 
-// MARK: - Reflection Engine (v1 heuristics)
+// MARK: - Reflection Engine (simple + useful, v1)
 
 enum ReflectionEngine {
     static func generate(from recent: [HistoryItem]) -> ReflectionItem {
         let combined = recent
-            .map { "\($0.title) \($0.model.summary)" }
+            .map { "\($0.title) \($0.model.summary) \($0.model.organized.joined(separator: " "))" }
             .joined(separator: " ")
             .lowercased()
 
-        let themes = topThemes(from: combined).prefix(3)
+        let themes = topThemes(from: combined).prefix(4)
         let themeText = themes.isEmpty ? "your recent focus areas" : themes.joined(separator: ", ")
 
         let title = "Themes: \(themeText.capitalized)"
         let insight =
 """
-Across your recent conversations, the recurring themes are: \(themeText).
-If you want, I can turn one of these into a short, prioritized plan.
+Across your recent entries, the recurring themes are: \(themeText).
+
+If you want, pick one theme and I’ll turn it into a tiny plan you can do in 15 minutes.
 """
 
         return ReflectionItem(
@@ -126,12 +254,13 @@ If you want, I can turn one of these into a short, prioritized plan.
             "the","a","an","and","or","to","of","in","on","for","with","my","i","me","you",
             "this","that","it","is","are","be","was","were","as","at","by","from","we",
             "plan","help","notes","summary","meeting","today","week","morning",
-            "thinking","through","would","like","turn","into","simple"
+            "thinking","through","would","like","turn","into","simple","about","your","recent"
         ]
 
         let tokens = text
             .replacingOccurrences(of: "’", with: "'")
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { $0.count >= 4 }
             .filter { !stop.contains($0) }
 
@@ -144,7 +273,7 @@ If you want, I can turn one of these into a short, prioritized plan.
     }
 }
 
-// MARK: - App Routes
+// MARK: - Routes
 
 private enum Route: Hashable {
     case reflections
@@ -152,6 +281,7 @@ private enum Route: Hashable {
     case processing(AdvisorResponseModel)
     case response(AdvisorResponseModel)
     case reflectionDetail(ReflectionItem)
+    case plan(PlanInput)
 }
 
 // MARK: - Home State
@@ -173,6 +303,8 @@ private func formatTimestamp(_ date: Date) -> String {
 // MARK: - Root
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
+
     @State private var path = NavigationPath()
     @StateObject private var store = AppStore()
 
@@ -192,10 +324,15 @@ struct ContentView: View {
                         AdvisorResponseView(path: $path, model: model)
                     case .reflectionDetail(let item):
                         ReflectionDetailView(path: $path, item: item)
+                    case .plan(let input):
+                        PlanView(path: $path, input: input)
                     }
                 }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            store.setContextIfNeeded(modelContext)
+        }
     }
 }
 
@@ -213,13 +350,10 @@ private struct ProcessingView: View {
 
             VStack(spacing: 18) {
                 Spacer()
-
                 ProcessingPulse()
-
                 Text("Working on it…")
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(CounselColors.secondaryText)
-
                 Spacer()
             }
             .padding(.horizontal, 24)
@@ -229,8 +363,7 @@ private struct ProcessingView: View {
             guard !didNavigate else { return }
             didNavigate = true
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
-                // Replace processing route with response route (standard animation feel)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                 if path.count > 0 { path.removeLast() }
                 path.append(Route.response(next))
             }
@@ -261,7 +394,7 @@ private struct ProcessingPulse: View {
     }
 }
 
-// MARK: - Home (Sacred)
+// MARK: - Home
 
 private struct HomeView: View {
     @Binding var path: NavigationPath
@@ -371,9 +504,14 @@ private struct HomeView: View {
                 onGoHistory: {
                     showMenu = false
                     path.append(Route.history)
+                },
+                onClearAll: {
+                    showMenu = false
+                    store.clearAllData()
+                    path = NavigationPath()
                 }
             )
-            .presentationDetents([.height(220)])
+            .presentationDetents([.height(270)])
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showTypeSheet) {
@@ -385,7 +523,7 @@ private struct HomeView: View {
 
                 let model = AdvisorStub.generateResponse(from: input)
 
-                // ✅ Save the interaction + maybe generate a reflection
+                // Save the interaction + rebuild derived reflections.
                 store.recordInteraction(input: input, model: model)
 
                 typedText = ""
@@ -405,14 +543,14 @@ private struct HomeView: View {
     }
 }
 
-// MARK: - Advisor Stub (v1)
+// MARK: - Advisor Stub (replace with real model later)
 
 private enum AdvisorStub {
     static func generateResponse(from input: String) -> AdvisorResponseModel {
-        let summary = "You’re thinking through: “\(truncate(input, limit: 90))”"
+        let summary = "You’re thinking through: “\(truncate(input, limit: 96))”"
 
         let organized: [String] = [
-            "Key point: \(truncate(input, limit: 60))",
+            "Key point: \(truncate(input, limit: 66))",
             "Constraint: unclear (worth clarifying)",
             "Next: decide what “done” looks like"
         ]
@@ -422,7 +560,7 @@ private enum AdvisorStub {
         return AdvisorResponseModel(
             summary: summary,
             organized: organized,
-            nextStepPrompt: "Would you like me to turn this into a simple plan?",
+            nextStepPrompt: "Turn this into a plan",
             memorySnippet: memorySnippet
         )
     }
@@ -435,8 +573,8 @@ private enum AdvisorStub {
 
     private static func extractPreference(_ input: String) -> String? {
         let lowered = input.lowercased()
-        if lowered.contains("i prefer ") || lowered.contains("i like ") {
-            return truncate(input, limit: 80)
+        if lowered.contains("i prefer ") || lowered.contains("i like ") || lowered.contains("i want ") {
+            return truncate(input, limit: 90)
         }
         return nil
     }
@@ -462,7 +600,7 @@ private struct ReflectionsView: View {
                             .foregroundStyle(CounselColors.tertiaryText)
 
                         if store.reflections.isEmpty {
-                            Text("No reflections yet.")
+                            Text("No reflections yet.\nAdd a few entries first.")
                                 .font(.system(size: 18, weight: .regular))
                                 .foregroundStyle(CounselColors.tertiaryText)
                                 .padding(.top, 8)
@@ -513,6 +651,13 @@ private struct ReflectionDetailView: View {
                         .buttonStyle(.plain)
 
                         Spacer()
+
+                        Button("Turn into a plan") {
+                            path.append(Route.plan(planInput(from: item)))
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(CounselColors.primaryText)
+                        .buttonStyle(.plain)
                     }
                     .padding(.top, 6)
 
@@ -539,6 +684,15 @@ private struct ReflectionDetailView: View {
         }
         .navigationBarHidden(true)
     }
+
+    private func planInput(from reflection: ReflectionItem) -> PlanInput {
+        let bullets = PlanHeuristics.bullets(from: reflection.insight)
+        return PlanInput(
+            title: reflection.title,
+            summary: reflection.insight.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines),
+            bullets: bullets
+        )
+    }
 }
 
 // MARK: - History
@@ -546,6 +700,18 @@ private struct ReflectionDetailView: View {
 private struct HistoryView: View {
     @Binding var path: NavigationPath
     @EnvironmentObject private var store: AppStore
+
+    @State private var query: String = ""
+
+    var filtered: [HistoryItem] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return store.history }
+        return store.history.filter { item in
+            item.title.lowercased().contains(q) ||
+            item.model.summary.lowercased().contains(q) ||
+            item.model.organized.joined(separator: " ").lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -560,13 +726,15 @@ private struct HistoryView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
-                        if store.history.isEmpty {
-                            Text("Nothing yet.")
+                        SearchBar(text: $query)
+
+                        if filtered.isEmpty {
+                            Text(query.isEmpty ? "Nothing yet." : "No matches.")
                                 .font(.system(size: 18, weight: .regular))
                                 .foregroundStyle(CounselColors.tertiaryText)
                                 .padding(.top, 8)
                         } else {
-                            ForEach(store.history) { item in
+                            ForEach(filtered) { item in
                                 Button {
                                     path.append(Route.response(item.model))
                                 } label: {
@@ -585,6 +753,36 @@ private struct HistoryView: View {
             }
         }
         .navigationBarHidden(true)
+    }
+}
+
+private struct SearchBar: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(CounselColors.tertiaryText)
+
+            TextField("Search", text: $text)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .foregroundStyle(CounselColors.primaryText)
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(CounselColors.tertiaryText)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(.ultraThinMaterial.opacity(0.18))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -651,7 +849,7 @@ private struct AdvisorResponseView: View {
                     }
 
                     Button {
-                        // TODO: implement "turn into a plan"
+                        path.append(Route.plan(planInput(from: model)))
                     } label: {
                         HStack(spacing: 10) {
                             Text(model.nextStepPrompt)
@@ -700,6 +898,291 @@ private struct AdvisorResponseView: View {
         }
         .navigationBarHidden(true)
     }
+
+    private func planInput(from model: AdvisorResponseModel) -> PlanInput {
+        PlanInput(
+            title: "Plan",
+            summary: model.summary,
+            bullets: model.organized
+        )
+    }
+}
+
+// MARK: - Plan
+
+private enum PlanTimeframe: String, CaseIterable, Identifiable, Hashable {
+    case today = "Today"
+    case thisWeek = "This week"
+    case thisMonth = "This month"
+    var id: String { rawValue }
+}
+
+private enum PlanPriority: String, CaseIterable, Identifiable, Hashable {
+    case quickWin = "Quick win"
+    case important = "Important"
+    case deepWork = "Deep work"
+    var id: String { rawValue }
+}
+
+private struct PlanView: View {
+    @Binding var path: NavigationPath
+    let input: PlanInput
+
+    @State private var timeframe: PlanTimeframe = .thisWeek
+    @State private var priority: PlanPriority = .important
+    @State private var checked: Set<Int> = []
+    @State private var showCopied: Bool = false
+
+    var body: some View {
+        ZStack {
+            CounselGradientBackground().ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+
+                    HStack {
+                        Button {
+                            if path.count > 0 { path.removeLast() }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(CounselColors.tertiaryText)
+                                .padding(.vertical, 8)
+                                .padding(.trailing, 6)
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button(showCopied ? "Copied" : "Copy top") {
+                            copyTopAction()
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 6)
+
+                    Text("Plan")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CounselColors.tertiaryText)
+
+                    Text(input.summary)
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundStyle(CounselColors.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Settings")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(CounselColors.tertiaryText)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            planPicker(title: "Timeframe", selection: $timeframe)
+                            planPicker(title: "Priority", selection: $priority)
+                        }
+                        .padding(14)
+                        .background(.ultraThinMaterial.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Next actions")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(CounselColors.tertiaryText)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
+                                Button {
+                                    toggle(idx)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Image(systemName: checked.contains(idx) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(checked.contains(idx) ? CounselColors.primaryText : CounselColors.tertiaryText)
+
+                                        Text(action)
+                                            .font(.system(size: 20, weight: .regular))
+                                            .foregroundStyle(CounselColors.primaryText.opacity(0.92))
+                                            .fixedSize(horizontal: false, vertical: true)
+
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.plain)
+
+                                if idx != actions.count - 1 {
+                                    Divider().opacity(0.10)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .background(.ultraThinMaterial.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+
+                    if checked.count > 0 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Nice. Done for now?")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(CounselColors.tertiaryText)
+
+                            Button {
+                                // Just pop back. Simple + clean.
+                                if path.count > 0 { path.removeLast() }
+                            } label: {
+                                HStack {
+                                    Text("Close")
+                                        .font(.system(size: 18, weight: .regular))
+                                        .foregroundStyle(CounselColors.secondaryText)
+                                    Spacer()
+                                    Image(systemName: "xmark")
+                                        .foregroundStyle(CounselColors.tertiaryText)
+                                }
+                                .padding(14)
+                                .background(.ultraThinMaterial.opacity(0.18))
+                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Spacer(minLength: 24)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 40)
+                .padding(.bottom, 24)
+            }
+        }
+        .navigationBarHidden(true)
+    }
+
+    private var actions: [String] {
+        let out = PlanHeuristics.actions(from: input.bullets, timeframe: timeframe, priority: priority)
+        return out
+    }
+
+    private func toggle(_ idx: Int) {
+        if checked.contains(idx) { checked.remove(idx) }
+        else { checked.insert(idx) }
+    }
+
+    private func copyTopAction() {
+        guard let first = actions.first else { return }
+        UIPasteboard.general.string = first
+        showCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            showCopied = false
+        }
+    }
+
+    private func planPicker<T: CaseIterable & Identifiable & RawRepresentable & Hashable>(
+        title: String,
+        selection: Binding<T>
+    ) -> some View where T.RawValue == String {
+        HStack {
+            Text(title)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(CounselColors.secondaryText)
+
+            Spacer()
+
+            Picker(title, selection: selection) {
+                ForEach(Array(T.allCases), id: \.id) { v in
+                    Text(v.rawValue).tag(v)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(CounselColors.primaryText)
+        }
+    }
+}
+
+private enum PlanHeuristics {
+    static func bullets(from insight: String) -> [String] {
+        // Split into short-ish sentences, prefer actionable ones.
+        let cleaned = insight
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "…", with: ".")
+        let parts = cleaned
+            .components(separatedBy: CharacterSet(charactersIn: ".!?"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 8 }
+
+        if parts.isEmpty {
+            return ["Pick one theme and define what success looks like.", "List the smallest next step.", "Block 15 minutes to start."]
+        }
+
+        // Keep up to 6 bullets.
+        return Array(parts.prefix(6))
+    }
+
+    static func actions(from bullets: [String], timeframe: PlanTimeframe, priority: PlanPriority) -> [String] {
+        var out: [String] = []
+        for b in bullets {
+            let a = normalizeToAction(b)
+            if !a.isEmpty { out.append(a) }
+            if out.count == 3 { break }
+        }
+
+        if out.isEmpty {
+            out = [
+                "Write down what “done” looks like.",
+                "List the smallest next step you can take.",
+                "Block 15 minutes and start."
+            ]
+        }
+
+        // Light flavoring (simple, not preachy)
+        switch priority {
+        case .quickWin:
+            out = out.map { "Quick win (\(timeframe.rawValue.lowercased())): \($0)" }
+        case .important:
+            break
+        case .deepWork:
+            out = out.map { "Deep work: \($0)" }
+        }
+
+        return out
+    }
+
+    private static func normalizeToAction(_ s: String) -> String {
+        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return "" }
+
+        // Remove leading labels like "Key point:" "Constraint:" "Next:"
+        let prefixes = ["key point:", "constraint:", "next:", "note:"]
+        let lower = t.lowercased()
+        for p in prefixes {
+            if lower.hasPrefix(p) {
+                t = t.dropFirst(p.count).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+
+        // Convert common non-actions into actions
+        let l = t.lowercased()
+        if l.contains("unclear") || l.contains("not sure") {
+            t = "Write one sentence clarifying what you mean."
+        } else if l.contains("worth clarifying") {
+            t = "Write 3 bullets clarifying what matters most."
+        }
+
+        // Ensure it reads like an action.
+        let starters = ["decide","write","list","pick","define","clarify","schedule","draft","start","review","ask"]
+        if !starters.contains(where: { t.lowercased().hasPrefix($0) }) {
+            t = "Clarify " + t
+        }
+
+        // Capitalize first letter
+        if let first = t.first {
+            t.replaceSubrange(t.startIndex...t.startIndex, with: String(first).uppercased())
+        }
+
+        t = t.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return t
+    }
 }
 
 // MARK: - Review Header (text-only nav)
@@ -715,7 +1198,6 @@ private struct ReviewHeader: View {
     var body: some View {
         HStack(spacing: 22) {
             navItem("Home", isActive: active == .home) {
-                // Always return to root, even if deep in stack
                 path = NavigationPath()
             }
 
@@ -777,6 +1259,7 @@ private struct ReviewRow: View {
 private struct CounselMenuSheet: View {
     let onGoReflections: () -> Void
     let onGoHistory: () -> Void
+    let onClearAll: () -> Void
 
     var body: some View {
         ZStack {
@@ -797,6 +1280,13 @@ private struct CounselMenuSheet: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(CounselColors.primaryText)
                     .onTapGesture { onGoHistory() }
+
+                Divider().opacity(0.12)
+
+                Text("Clear all data")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.red.opacity(0.88))
+                    .onTapGesture { onClearAll() }
 
                 Spacer()
             }
@@ -870,4 +1360,5 @@ private struct CounselGradientBackground: View {
 
 #Preview {
     ContentView()
+        .modelContainer(for: [HistoryRecord.self], inMemory: true)
 }

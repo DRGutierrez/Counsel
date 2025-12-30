@@ -1,6 +1,8 @@
 import Foundation
 import SwiftData
 
+/// Source of truth for Counsel: persisted history only.
+/// Everything else (reflections, plans) is derived from history.
 @Model
 final class HistoryRecord {
     var id: UUID
@@ -28,28 +30,5 @@ final class HistoryRecord {
         self.organized = organized
         self.nextStepPrompt = nextStepPrompt
         self.memorySnippet = memorySnippet
-    }
-}
-
-@Model
-final class ReflectionRecord {
-    var id: UUID
-    var createdAt: Date
-    var title: String
-    var insight: String
-    var supportingHistoryIDs: [UUID]
-
-    init(
-        id: UUID,
-        createdAt: Date,
-        title: String,
-        insight: String,
-        supportingHistoryIDs: [UUID]
-    ) {
-        self.id = id
-        self.createdAt = createdAt
-        self.title = title
-        self.insight = insight
-        self.supportingHistoryIDs = supportingHistoryIDs
     }
 }

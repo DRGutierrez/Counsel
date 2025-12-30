@@ -1,11 +1,5 @@
-//
-//  CounselApp.swift
-//  Counsel
-//
-//  Created by Daniel Gutierrez on 12/29/25.
-//
-
 import SwiftUI
+import SwiftData
 
 @main
 struct CounselApp: App {
@@ -13,5 +7,6 @@ struct CounselApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(for: [HistoryRecord.self])
     }
 }
