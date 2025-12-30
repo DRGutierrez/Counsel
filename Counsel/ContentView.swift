@@ -31,6 +31,11 @@ struct ReflectionItem: Identifiable, Hashable {
 /// A normalized input to the Plan screen, so we can plan from:
 /// - an Advisor response
 /// - a Reflection
+private struct PlanInput: Hashable {
+    let title: String
+    let summary: String
+    let bullets: [String]
+}
 
 // MARK: - Store (History persisted, reflections derived)
 
@@ -276,7 +281,7 @@ private enum Route: Hashable {
     case processing(AdvisorResponseModel)
     case response(AdvisorResponseModel)
     case reflectionDetail(ReflectionItem)
-    case plan(UUID)
+    case plan(PlanInput)
 }
 
 // MARK: - Home State
@@ -316,11 +321,11 @@ struct ContentView: View {
                     case .processing(let model):
                         ProcessingView(path: $path, next: model)
                     case .response(let model):
-                        AdvisorResponseView(path: $path, model: model).environmentObject(store)
+                        AdvisorResponseView(path: $path, model: model)
                     case .reflectionDetail(let item):
                         ReflectionDetailView(path: $path, item: item)
-                    case .plan(let id):
-                        PlanRouteView(path: $path, recordID: id)
+                    case .plan(let input):
+                        PlanView(path: $path, input: input)
                     }
                 }
         }
@@ -341,12 +346,12 @@ private struct ProcessingView: View {
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             VStack(spacing: 18) {
                 Spacer()
                 ProcessingPulse()
-                Text("Working on it…")
+                Text(Copy.App.workingOnIt)
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(CounselColors.secondaryText)
                 Spacer()
@@ -397,13 +402,13 @@ private struct HomeView: View {
 
     @State private var mode: HomeMode = .listening
     @State private var showMenu = false
-    @State private var showPaywall = false
     @State private var showTypeSheet = false
     @State private var typedText = ""
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground()
+                .ignoresSafeArea()
 
             VStack(spacing: 28) {
                 Spacer()
@@ -436,12 +441,12 @@ private struct HomeView: View {
 
                 if mode == .didntCatchThat {
                     VStack(spacing: 14) {
-                        Button("Try again") { mode = .listening }
+                        Button(Copy.Home.tryAgain) { mode = .listening }
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(CounselColors.primaryText)
                             .buttonStyle(.plain)
 
-                        Button("Type instead") { showTypeSheet = true }
+                        Button(Copy.Home.typeInstead) { showTypeSheet = true }
                             .font(.system(size: 18, weight: .regular))
                             .foregroundStyle(CounselColors.secondaryText)
                             .buttonStyle(.plain)
@@ -462,34 +467,19 @@ private struct HomeView: View {
             }
             .padding(.horizontal, 24)
 
-            // Top bar
+            // Top-right menu + TEMP debug toggle
             VStack {
                 HStack {
-                    Button { showPaywall = true } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "crown")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Pro")
-                                .font(.system(size: 14, weight: .semibold))
-                        }
-                        .foregroundStyle(CounselColors.tertiaryText)
-                        .padding(.leading, 16)
-                        .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
-
-                    #if DEBUG
                     Button {
                         mode = (mode == .listening) ? .didntCatchThat : .listening
                     } label: {
                         Text(mode == .listening ? "Test error" : "Back to listen")
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(CounselColors.tertiaryText)
-                            .padding(.leading, 10)
+                            .padding(.leading, 16)
                             .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
-                    #endif
 
                     Spacer()
 
@@ -507,10 +497,6 @@ private struct HomeView: View {
         .navigationBarHidden(true)
         .sheet(isPresented: $showMenu) {
             CounselMenuSheet(
-                onGoPro: {
-                    showMenu = false
-                    showPaywall = true
-                },
                 onGoReflections: {
                     showMenu = false
                     path.append(Route.reflections)
@@ -528,13 +514,7 @@ private struct HomeView: View {
             .presentationDetents([.height(270)])
             .presentationDragIndicator(.visible)
         }
-        
-        .sheet(isPresented: $showPaywall) {
-            PaywallView()
-                .presentationDetents([.height(420), .large])
-                .presentationDragIndicator(.visible)
-        }
-.sheet(isPresented: $showTypeSheet) {
+        .sheet(isPresented: $showTypeSheet) {
             CounselTypeSheet(text: $typedText) {
                 showTypeSheet = false
 
@@ -555,7 +535,7 @@ private struct HomeView: View {
     }
 
     private var primaryLine: String {
-        mode == .listening ? "I'm listening." : "I didn't catch that."
+        mode == .listening ? Copy.Home.listening : Copy.Home.didntCatchThat
     }
 
     private var secondaryLine: String? {
@@ -580,7 +560,7 @@ private enum AdvisorStub {
         return AdvisorResponseModel(
             summary: summary,
             organized: organized,
-            nextStepPrompt: "Turn this into a plan",
+            nextStepPrompt: Copy.Response.chooseMyNextStep,
             memorySnippet: memorySnippet
         )
     }
@@ -608,19 +588,19 @@ private struct ReflectionsView: View {
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             VStack(spacing: 18) {
                 ReviewHeader(active: .reflections, path: $path)
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Reflections")
+                        Text(Copy.Reflections.title)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
                         if store.reflections.isEmpty {
-                            Text("No reflections yet.\nAdd a few entries first.")
+                            Text(Copy.Reflections.empty)
                                 .font(.system(size: 18, weight: .regular))
                                 .foregroundStyle(CounselColors.tertiaryText)
                                 .padding(.top, 8)
@@ -653,7 +633,7 @@ private struct ReflectionDetailView: View {
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
@@ -672,8 +652,8 @@ private struct ReflectionDetailView: View {
 
                         Spacer()
 
-                        Button("Turn into a plan") {
-                            if let id = item.supportingHistoryIDs.first { path.append(Route.plan(id)) }
+                        Button(Copy.Reflections.chooseNextStep) {
+                            path.append(Route.plan(planInput(from: item)))
                         }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(CounselColors.primaryText)
@@ -681,7 +661,7 @@ private struct ReflectionDetailView: View {
                     }
                     .padding(.top, 6)
 
-                    Text("Reflection")
+                    Text(Copy.Reflections.reflectionLabel)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(CounselColors.tertiaryText)
 
@@ -705,6 +685,14 @@ private struct ReflectionDetailView: View {
         .navigationBarHidden(true)
     }
 
+    private func planInput(from reflection: ReflectionItem) -> PlanInput {
+        let bullets = PlanHeuristics.bullets(from: reflection.insight)
+        return PlanInput(
+            title: reflection.title,
+            summary: reflection.insight.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines),
+            bullets: bullets
+        )
+    }
 }
 
 // MARK: - History
@@ -727,21 +715,21 @@ private struct HistoryView: View {
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             VStack(spacing: 18) {
                 ReviewHeader(active: .history, path: $path)
 
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("Recent")
+                        Text(Copy.History.recent)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
                         SearchBar(text: $query)
 
                         if filtered.isEmpty {
-                            Text(query.isEmpty ? "Nothing yet." : "No matches.")
+                            Text(query.isEmpty ? Copy.History.empty : Copy.History.noMatches)
                                 .font(.system(size: 18, weight: .regular))
                                 .foregroundStyle(CounselColors.tertiaryText)
                                 .padding(.top, 8)
@@ -776,7 +764,7 @@ private struct SearchBar: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(CounselColors.tertiaryText)
 
-            TextField("Search", text: $text)
+            TextField(Copy.History.searchPlaceholder, text: $text)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
                 .foregroundStyle(CounselColors.primaryText)
@@ -793,7 +781,7 @@ private struct SearchBar: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background(.ultraThinMaterial)
+        .background(.ultraThinMaterial.opacity(0.18))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -803,13 +791,12 @@ private struct SearchBar: View {
 private struct AdvisorResponseView: View {
     @Binding var path: NavigationPath
     let model: AdvisorResponseModel
-    @EnvironmentObject private var store: AppStore
 
     @State private var showMemoryAck: Bool = true
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
@@ -831,7 +818,7 @@ private struct AdvisorResponseView: View {
                     .padding(.top, 6)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Summary")
+                        Text(Copy.Response.summaryHeader)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
@@ -842,7 +829,7 @@ private struct AdvisorResponseView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Organized thoughts")
+                        Text(Copy.Response.keyThoughtsHeader)
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
@@ -862,12 +849,10 @@ private struct AdvisorResponseView: View {
                     }
 
                     Button {
-                        if let id = store.history.first?.id {
-                            path.append(Route.plan(id))
-                        }
+                        path.append(Route.plan(planInput(from: model)))
                     } label: {
                         HStack(spacing: 10) {
-                            Text(model.nextStepPrompt)
+                            Text(Copy.Response.chooseMyNextStep)
                                 .font(.system(size: 18, weight: .regular))
                                 .foregroundStyle(CounselColors.secondaryText)
                             Spacer()
@@ -883,13 +868,13 @@ private struct AdvisorResponseView: View {
                     if model.memorySnippet != nil, showMemoryAck {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text("I’ll remember this.")
+                                Text(Copy.Response.memoryAckTitle)
                                     .font(.system(size: 15, weight: .regular))
                                     .foregroundStyle(CounselColors.tertiaryText)
 
                                 Spacer()
 
-                                Button("Undo") {
+                                Button(Copy.Response.undo) {
                                     showMemoryAck = false
                                 }
                                 .font(.system(size: 15, weight: .regular))
@@ -897,7 +882,7 @@ private struct AdvisorResponseView: View {
                                 .buttonStyle(.plain)
                             }
 
-                            Text("You can review or remove memories anytime.")
+                            Text(Copy.Response.memoryAckSubtitle)
                                 .font(.system(size: 13, weight: .regular))
                                 .foregroundStyle(CounselColors.tertiaryText.opacity(0.85))
                         }
@@ -914,6 +899,13 @@ private struct AdvisorResponseView: View {
         .navigationBarHidden(true)
     }
 
+    private func planInput(from model: AdvisorResponseModel) -> PlanInput {
+        PlanInput(
+            title: "Plan",
+            summary: model.summary,
+            bullets: model.organized
+        )
+    }
 }
 
 // MARK: - Plan
@@ -932,291 +924,156 @@ private enum PlanPriority: String, CaseIterable, Identifiable, Hashable {
     var id: String { rawValue }
 }
 
-
-private struct PlanRouteView: View {
-    @Binding var path: NavigationPath
-    let recordID: UUID
-
-    @Environment(\.modelContext) private var modelContext
-    @State private var record: HistoryRecord?
-
-    var body: some View {
-        Group {
-            if let record {
-                PlanView(path: $path, record: record)
-            } else {
-                ZStack {
-                    AppGradients.counsel.ignoresSafeArea()
-                    ProgressView("Loading…")
-                        .tint(CounselColors.primaryText)
-                }
-                .task { await load() }
-            }
-        }
-        .navigationBarHidden(true)
-    }
-
-    private func load() async {
-        do {
-            let descriptor = FetchDescriptor<HistoryRecord>(
-                predicate: #Predicate { $0.id == recordID },
-                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-            )
-            record = try modelContext.fetch(descriptor).first
-        } catch {
-            record = nil
-        }
-    }
-}
-
 private struct PlanView: View {
     @Binding var path: NavigationPath
-    @Environment(\.modelContext) private var modelContext
-    let record: HistoryRecord
-
+    let input: PlanInput
 
     @State private var timeframe: PlanTimeframe = .thisWeek
     @State private var priority: PlanPriority = .important
-
-    // Single-choice selection (radio)
-    @State private var selectedActionIndex: Int? = nil
-
+    @State private var checked: Set<Int> = []
     @State private var showCopied: Bool = false
-    @State private var showCommitted: Bool = false
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
+                VStack(alignment: .leading, spacing: 22) {
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Commit the plan")
-                            .font(.system(size: 14, weight: .semibold))
+                    HStack {
+                        Button {
+                            // Go straight back to Home
+                            path = NavigationPath()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(CounselColors.tertiaryText)
+                                .padding(.vertical, 8)
+                                .padding(.trailing, 6)
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button(showCopied ? "Copied" : "Copy top") {
+                            copyTopAction()
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 6)
+
+                    Text("Plan")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CounselColors.tertiaryText)
+
+                    Text(input.summary)
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundStyle(CounselColors.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Settings")
+                            .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
-                        Text(record.summary)
-                            .font(.system(size: 28, weight: .regular))
-                            .foregroundStyle(CounselColors.primaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 10) {
+                            planPicker(title: "Timeframe", selection: $timeframe)
+                            planPicker(title: "Priority", selection: $priority)
+                        }
+                        .padding(14)
+                        .background(.ultraThinMaterial.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
 
-                    settingsCard
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Next actions")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(CounselColors.tertiaryText)
 
-                    nextMoveCard
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
+                                Button {
+                                    toggle(idx)
+                                } label: {
+                                    HStack(alignment: .top, spacing: 12) {
+                                        Image(systemName: checked.contains(idx) ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundStyle(checked.contains(idx) ? CounselColors.primaryText : CounselColors.tertiaryText)
+
+                                        Text(action)
+                                            .font(.system(size: 20, weight: .regular))
+                                            .foregroundStyle(CounselColors.primaryText.opacity(0.92))
+                                            .fixedSize(horizontal: false, vertical: true)
+
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.plain)
+
+                                if idx != actions.count - 1 {
+                                    Divider().opacity(0.10)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .background(.ultraThinMaterial.opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+
+                    if checked.count > 0 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(Copy.App.doneForNow)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(CounselColors.tertiaryText)
+
+                            Button {
+                                // Always go to Home (root)
+                                path = NavigationPath()
+                            } label: {
+                                HStack {
+                                    Text(Copy.App.doneForNow)
+                                        .font(.system(size: 18, weight: .regular))
+                                        .foregroundStyle(CounselColors.secondaryText)
+                                    Spacer()
+                                    Image(systemName: "xmark")
+                                        .foregroundStyle(CounselColors.tertiaryText)
+                                }
+                                .padding(14)
+                                .background(.ultraThinMaterial.opacity(0.18))
+                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
 
                     Spacer(minLength: 24)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 40)
-                .padding(.bottom, 90) // leave room for bottom CTA
+                .padding(.bottom, 24)
             }
         }
         .navigationBarHidden(true)
-        .safeAreaInset(edge: .bottom) {
-            bottomCTA
-        }
     }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Button {
-                if path.count > 0 { path.removeLast() }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(CounselColors.tertiaryText)
-                    .padding(.vertical, 8)
-                    .padding(.trailing, 6)
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button(showCopied ? "Copied" : "Copy action") {
-                copySelectedAction()
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .buttonStyle(.plain)
-            .disabled(selectedActionIndex == nil)
-            .opacity(selectedActionIndex == nil ? 0.45 : 1.0)
-        }
-    }
-
-    // MARK: - Cards
-
-    private var settingsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Settings")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(CounselColors.tertiaryText)
-
-            VStack(alignment: .leading, spacing: 10) {
-                planPicker(title: "Timeframe", selection: $timeframe)
-                planPicker(title: "Priority", selection: $priority)
-            }
-            .padding(14)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-    }
-
-    private var nextMoveCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Choose the move that unlocks progress")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(CounselColors.tertiaryText)
-
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
-                    Button {
-                        select(idx)
-                    } label: {
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: selectedActionIndex == idx ? "largecircle.fill.circle" : "circle")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(selectedActionIndex == idx ? CounselColors.primaryText : CounselColors.tertiaryText)
-
-                            Text(action)
-                                .font(.system(size: 18, weight: .regular))
-                                .foregroundStyle(CounselColors.primaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 10)
-                    }
-                    .buttonStyle(.plain)
-
-                    if idx != actions.count - 1 {
-                        Divider().opacity(0.10)
-                    }
-                }
-            }
-            .padding(14)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-    }
-
-    // MARK: - Bottom CTA
-
-    private var bottomCTA: some View {
-        VStack(spacing: 10) {
-            if showCommitted {
-                Text("Nice. You’ve locked in your next step.")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(CounselColors.tertiaryText)
-                    .transition(.opacity)
-            }
-
-            Button {
-                commit()
-            } label: {
-                HStack {
-                    Text(primaryButtonTitle)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(selectedActionIndex == nil ? CounselColors.secondaryText : .black)
-                    Spacer()
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(selectedActionIndex == nil ? CounselColors.tertiaryText : .black)
-                }
-                .padding(14)
-                .background {
-                    if selectedActionIndex == nil {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial).opacity(0.18)
-                    } else {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(CounselColors.primaryText)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(selectedActionIndex == nil)
-            .opacity(selectedActionIndex == nil ? 0.65 : 1.0)
-
-            Button {
-                // Success-driven exit, not "Close"
-                if path.count > 0 { path.removeLast() }
-            } label: {
-                HStack {
-                    Text("Done for now")
-                        .font(.system(size: 17, weight: .regular))
-                        .foregroundStyle(CounselColors.secondaryText)
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .foregroundStyle(CounselColors.tertiaryText)
-                }
-                .padding(14)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .background(.ultraThinMaterial)
-    }
-
-    private var primaryButtonTitle: String {
-        if let idx = selectedActionIndex {
-            return "Commit: \(actions[idx])"
-        }
-        return "Choose a next action"
-    }
-
-    // MARK: - Actions / Logic
 
     private var actions: [String] {
-        let out = PlanHeuristics.actions(from: record.organized, timeframe: timeframe, priority: priority)
+        let out = PlanHeuristics.actions(from: input.bullets, timeframe: timeframe, priority: priority)
         return out
     }
 
-    private func select(_ idx: Int) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        selectedActionIndex = idx
+    private func toggle(_ idx: Int) {
+        if checked.contains(idx) { checked.remove(idx) }
+        else { checked.insert(idx) }
     }
 
-    private func commit() {
-        guard let idx = selectedActionIndex else { return }
-
-        // Save the commitment into history (source of truth)
-        record.planCommittedAction = actions[idx]
-        record.planTimeframe = timeframe.rawValue
-        record.planPriority = priority.rawValue
-        record.planCommittedAt = Date()
-
-        do {
-            try modelContext.save()
-        } catch {
-            // If you already have an error banner system, hook it here.
-            // For now: silent fail is acceptable for V1, but better to show an alert.
-            print("Failed to save plan commitment: \(error)")
-        }
-
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        withAnimation(.easeInOut(duration: 0.18)) { showCommitted = true }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            if path.count > 0 { path.removeLast() }
-        }
-    }
-
-
-    private func copySelectedAction() {
-        guard let idx = selectedActionIndex else { return }
-        UIPasteboard.general.string = actions[idx]
+    private func copyTopAction() {
+        guard let first = actions.first else { return }
+        UIPasteboard.general.string = first
         showCopied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             showCopied = false
         }
     }
@@ -1227,7 +1084,7 @@ private struct PlanView: View {
     ) -> some View where T.RawValue == String {
         HStack {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(CounselColors.secondaryText)
 
             Spacer()
@@ -1401,37 +1258,18 @@ private struct ReviewRow: View {
 // MARK: - Menu Sheet
 
 private struct CounselMenuSheet: View {
-    let onGoPro: () -> Void
     let onGoReflections: () -> Void
     let onGoHistory: () -> Void
     let onClearAll: () -> Void
 
     var body: some View {
         ZStack {
-            AppGradients.counsel.ignoresSafeArea()
+            CounselGradientBackground().ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 10)
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Counsel Pro")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(CounselColors.primaryText)
-                        Text("Unlock unlimited + upcoming voice & AI.")
-                            .font(.system(size: 13, weight: .regular))
-                            .foregroundStyle(CounselColors.tertiaryText)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(CounselColors.tertiaryText)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { onGoPro() }
-
-                Divider().opacity(0.12)
-
-                Text("Reflections")
+                Text(Copy.Reflections.title)
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(CounselColors.primaryText)
                     .padding(.top, 8)
@@ -1446,9 +1284,9 @@ private struct CounselMenuSheet: View {
 
                 Divider().opacity(0.12)
 
-                Text("Clear all data")
+                Text(Copy.Menu.clearAllData)
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(CounselColors.destructive)
+                    .foregroundStyle(.red.opacity(0.88))
                     .onTapGesture { onClearAll() }
 
                 Spacer()
@@ -1467,17 +1305,17 @@ private struct CounselTypeSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                AppGradients.counsel.ignoresSafeArea()
+                CounselGradientBackground().ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Type instead")
+                    Text(Copy.TypeSheet.title)
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(CounselColors.tertiaryText)
 
                     TextEditor(text: $text)
                         .scrollContentBackground(.hidden)
                         .padding(12)
-                        .background(.ultraThinMaterial)
+                        .background(.ultraThinMaterial.opacity(0.25))
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .foregroundStyle(CounselColors.primaryText)
                         .frame(minHeight: 180)
@@ -1488,7 +1326,7 @@ private struct CounselTypeSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Send") { onSend() }
+                    Button(Copy.TypeSheet.send) { onSend() }
                         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -1497,9 +1335,23 @@ private struct CounselTypeSheet: View {
     }
 }
 
+// MARK: - Design System
+
+private struct CounselGradientBackground: View {
+    var body: some View {
+        LinearGradient(
+            stops: [
+                .init(color: Color.black.opacity(0.98), location: 0.0),
+                .init(color: Color.black.opacity(0.90), location: 0.55),
+                .init(color: Color.black.opacity(0.98), location: 1.0)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
 
 #Preview {
     ContentView()
         .modelContainer(for: [HistoryRecord.self], inMemory: true)
 }
-
