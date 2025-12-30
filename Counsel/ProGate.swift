@@ -28,10 +28,10 @@ struct ProGate<ProContent: View>: View {
                 VStack(spacing: 12) {
                     Text(title)
                         .font(.title3.bold())
-                        .foregroundStyle(.white.opacity(0.92))
+                        .foregroundColor(Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.92))
 
                     Text(message)
-                        .foregroundStyle(.white.opacity(0.60))
+                        .foregroundColor(Color(.sRGB, red: 1, green: 1, blue: 1, opacity: 0.60))
                         .multilineTextAlignment(.center)
 
                     Button("Unlock Pro") { showPaywall = true }
@@ -40,7 +40,8 @@ struct ProGate<ProContent: View>: View {
                 .padding(22)
             }
         }
-        .task { await sub.refreshEntitlements() }
+        .onAppear { Task { await sub.refreshEntitlements() } }
         .sheet(isPresented: $showPaywall) { PaywallView() }
     }
 }
+

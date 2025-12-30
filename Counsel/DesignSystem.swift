@@ -9,6 +9,8 @@ public enum CounselColors {
     public static let tertiaryText = Color(.sRGB, red: 1.0, green: 1.0, blue: 1.0, opacity: 0.38)
     public static let icon = Color(.sRGB, red: 1.0, green: 1.0, blue: 1.0, opacity: 0.65)
     public static let iconDisabled = Color(.sRGB, red: 1.0, green: 1.0, blue: 1.0, opacity: 0.45)
+    public static let destructive = Color(.sRGB, red: 1.0, green: 0.0, blue: 0.0, opacity: 0.88)
+    public static let border = Color(.sRGB, red: 1.0, green: 1.0, blue: 1.0, opacity: 0.18)
 }
 
 // Paywall-specific palette (shared so it can be reused anywhere)
@@ -28,3 +30,25 @@ public enum ProColors {
 
     public static let red90 = Color(.sRGB, red: 1, green: 0, blue: 0, opacity: 0.90)
 }
+public enum AppGradients {
+    public static let counsel = LinearGradient(
+        stops: [
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.98), location: 0.0),
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.90), location: 0.55),
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.98), location: 1.0)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    public static let pro = LinearGradient(
+        stops: [
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.98), location: 0.0),
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.90), location: 0.55),
+            .init(color: Color(.sRGB, red: 0.0, green: 0.0, blue: 0.0, opacity: 0.98), location: 1.0)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+

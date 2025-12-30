@@ -14,6 +14,12 @@ final class HistoryRecord {
     var nextStepPrompt: String
     var memorySnippet: String?
 
+    // ✅ Plan commitment (what user actually locks in)
+    var planTimeframe: String?
+    var planPriority: String?
+    var planCommittedAction: String?
+    var planCommittedAt: Date?
+
     init(
         id: UUID,
         createdAt: Date,
@@ -30,5 +36,11 @@ final class HistoryRecord {
         self.organized = organized
         self.nextStepPrompt = nextStepPrompt
         self.memorySnippet = memorySnippet
+
+        // defaults
+        self.planTimeframe = nil
+        self.planPriority = nil
+        self.planCommittedAction = nil
+        self.planCommittedAt = nil
     }
 }

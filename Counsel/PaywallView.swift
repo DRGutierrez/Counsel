@@ -9,7 +9,7 @@ struct PaywallView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ProGradientBackground().ignoresSafeArea()
+                AppGradients.pro.ignoresSafeArea()
 
                 VStack(spacing: 16) {
                     header
@@ -23,20 +23,20 @@ struct PaywallView: View {
                             Task { await sub.restore() }
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundColor(ProColors.white65)
 
-                        Text("•").foregroundStyle(.white.opacity(0.35))
+                        Text("•").foregroundColor(ProColors.white35)
 
                         Text("Cancel anytime in Settings → Subscriptions")
                             .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundColor(ProColors.white55)
                     }
                     .padding(.top, 6)
 
                     if let err = sub.lastError {
                         Text(err)
                             .font(.footnote)
-                            .foregroundStyle(.red.opacity(0.9))
+                            .foregroundColor(ProColors.red90)
                             .multilineTextAlignment(.center)
                             .padding(.top, 4)
                     }
@@ -48,7 +48,7 @@ struct PaywallView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") { dismiss() }
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundColor(ProColors.white70)
                 }
             }
             .task {
@@ -65,15 +65,15 @@ struct PaywallView: View {
             HStack(spacing: 10) {
                 Image(systemName: "crown.fill")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundColor(ProColors.white92)
                 Text("Counsel Pro")
                     .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundColor(ProColors.white92)
             }
 
             Text("Keep it simple. Keep it moving.")
                 .font(.system(size: 16, weight: .regular))
-                .foregroundStyle(.white.opacity(0.62))
+                .foregroundColor(ProColors.white62)
         }
         .padding(.top, 6)
     }
@@ -85,7 +85,7 @@ struct PaywallView: View {
             benefitRow("Upcoming: voice capture + smarter advisor")
         }
         .padding(16)
-        .background(.ultraThinMaterial.opacity(0.18))
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .padding(.top, 10)
     }
@@ -93,10 +93,10 @@ struct PaywallView: View {
     private func benefitRow(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundColor(ProColors.white75)
             Text(text)
                 .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(.white.opacity(0.88))
+                .foregroundColor(ProColors.white88)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
@@ -115,25 +115,25 @@ struct PaywallView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Go Pro (Monthly)")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.92))
+                        .foregroundColor(ProColors.white92)
                     Text(subtitlePrice)
                         .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.60))
+                        .foregroundColor(ProColors.white60)
                 }
                 Spacer()
                 if busy {
                     ProgressView()
-                        .tint(.white.opacity(0.85))
+                        .tint(ProColors.white85)
                 } else {
                     Image(systemName: "chevron.right")
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundColor(ProColors.white65)
                 }
             }
             .padding(16)
-            .background(.white.opacity(0.10))
+            .background(ProColors.white10)
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 1)
+                    .stroke(ProColors.white18, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
@@ -147,16 +147,3 @@ struct PaywallView: View {
     }
 }
 
-private struct ProGradientBackground: View {
-    var body: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.black.opacity(0.98), location: 0.0),
-                .init(color: Color.black.opacity(0.90), location: 0.55),
-                .init(color: Color.black.opacity(0.98), location: 1.0)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-}

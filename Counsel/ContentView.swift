@@ -31,11 +31,6 @@ struct ReflectionItem: Identifiable, Hashable {
 /// A normalized input to the Plan screen, so we can plan from:
 /// - an Advisor response
 /// - a Reflection
-private struct PlanInput: Hashable {
-    let title: String
-    let summary: String
-    let bullets: [String]
-}
 
 // MARK: - Store (History persisted, reflections derived)
 
@@ -281,7 +276,7 @@ private enum Route: Hashable {
     case processing(AdvisorResponseModel)
     case response(AdvisorResponseModel)
     case reflectionDetail(ReflectionItem)
-    case plan(PlanInput)
+    case plan(UUID)
 }
 
 // MARK: - Home State
@@ -321,11 +316,11 @@ struct ContentView: View {
                     case .processing(let model):
                         ProcessingView(path: $path, next: model)
                     case .response(let model):
-                        AdvisorResponseView(path: $path, model: model)
+                        AdvisorResponseView(path: $path, model: model).environmentObject(store)
                     case .reflectionDetail(let item):
                         ReflectionDetailView(path: $path, item: item)
-                    case .plan(let input):
-                        PlanView(path: $path, input: input)
+                    case .plan(let id):
+                        PlanRouteView(path: $path, recordID: id)
                     }
                 }
         }
@@ -346,7 +341,7 @@ private struct ProcessingView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             VStack(spacing: 18) {
                 Spacer()
@@ -408,8 +403,7 @@ private struct HomeView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground()
-                .ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             VStack(spacing: 28) {
                 Spacer()
@@ -614,7 +608,7 @@ private struct ReflectionsView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             VStack(spacing: 18) {
                 ReviewHeader(active: .reflections, path: $path)
@@ -659,7 +653,7 @@ private struct ReflectionDetailView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
@@ -679,7 +673,7 @@ private struct ReflectionDetailView: View {
                         Spacer()
 
                         Button("Turn into a plan") {
-                            path.append(Route.plan(planInput(from: item)))
+                            if let id = item.supportingHistoryIDs.first { path.append(Route.plan(id)) }
                         }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(CounselColors.primaryText)
@@ -711,14 +705,6 @@ private struct ReflectionDetailView: View {
         .navigationBarHidden(true)
     }
 
-    private func planInput(from reflection: ReflectionItem) -> PlanInput {
-        let bullets = PlanHeuristics.bullets(from: reflection.insight)
-        return PlanInput(
-            title: reflection.title,
-            summary: reflection.insight.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines),
-            bullets: bullets
-        )
-    }
 }
 
 // MARK: - History
@@ -741,7 +727,7 @@ private struct HistoryView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             VStack(spacing: 18) {
                 ReviewHeader(active: .history, path: $path)
@@ -807,7 +793,7 @@ private struct SearchBar: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .background(.ultraThinMaterial.opacity(0.18))
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -817,12 +803,13 @@ private struct SearchBar: View {
 private struct AdvisorResponseView: View {
     @Binding var path: NavigationPath
     let model: AdvisorResponseModel
+    @EnvironmentObject private var store: AppStore
 
     @State private var showMemoryAck: Bool = true
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
@@ -875,7 +862,9 @@ private struct AdvisorResponseView: View {
                     }
 
                     Button {
-                        path.append(Route.plan(planInput(from: model)))
+                        if let id = store.history.first?.id {
+                            path.append(Route.plan(id))
+                        }
                     } label: {
                         HStack(spacing: 10) {
                             Text(model.nextStepPrompt)
@@ -925,13 +914,6 @@ private struct AdvisorResponseView: View {
         .navigationBarHidden(true)
     }
 
-    private func planInput(from model: AdvisorResponseModel) -> PlanInput {
-        PlanInput(
-            title: "Plan",
-            summary: model.summary,
-            bullets: model.organized
-        )
-    }
 }
 
 // MARK: - Plan
@@ -950,9 +932,48 @@ private enum PlanPriority: String, CaseIterable, Identifiable, Hashable {
     var id: String { rawValue }
 }
 
+
+private struct PlanRouteView: View {
+    @Binding var path: NavigationPath
+    let recordID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @State private var record: HistoryRecord?
+
+    var body: some View {
+        Group {
+            if let record {
+                PlanView(path: $path, record: record)
+            } else {
+                ZStack {
+                    AppGradients.counsel.ignoresSafeArea()
+                    ProgressView("Loading…")
+                        .tint(CounselColors.primaryText)
+                }
+                .task { await load() }
+            }
+        }
+        .navigationBarHidden(true)
+    }
+
+    private func load() async {
+        do {
+            let descriptor = FetchDescriptor<HistoryRecord>(
+                predicate: #Predicate { $0.id == recordID },
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            record = try modelContext.fetch(descriptor).first
+        } catch {
+            record = nil
+        }
+    }
+}
+
 private struct PlanView: View {
     @Binding var path: NavigationPath
-    let input: PlanInput
+    @Environment(\.modelContext) private var modelContext
+    let record: HistoryRecord
+
 
     @State private var timeframe: PlanTimeframe = .thisWeek
     @State private var priority: PlanPriority = .important
@@ -965,7 +986,7 @@ private struct PlanView: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
@@ -976,7 +997,7 @@ private struct PlanView: View {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
-                        Text(input.summary)
+                        Text(record.summary)
                             .font(.system(size: 28, weight: .regular))
                             .foregroundStyle(CounselColors.primaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1023,7 +1044,7 @@ private struct PlanView: View {
             .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
-            .background(.ultraThinMaterial.opacity(0.12))
+            .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .buttonStyle(.plain)
             .disabled(selectedActionIndex == nil)
@@ -1044,7 +1065,7 @@ private struct PlanView: View {
                 planPicker(title: "Priority", selection: $priority)
             }
             .padding(14)
-            .background(.ultraThinMaterial.opacity(0.18))
+            .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
@@ -1082,7 +1103,7 @@ private struct PlanView: View {
                 }
             }
             .padding(14)
-            .background(.ultraThinMaterial.opacity(0.18))
+            .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
@@ -1110,8 +1131,13 @@ private struct PlanView: View {
                         .foregroundStyle(selectedActionIndex == nil ? CounselColors.tertiaryText : .black)
                 }
                 .padding(14)
-                .background(selectedActionIndex == nil ? .ultraThinMaterial.opacity(0.18) : CounselColors.primaryText)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background {
+                    if selectedActionIndex == nil {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial).opacity(0.18)
+                    } else {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill(CounselColors.primaryText)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .disabled(selectedActionIndex == nil)
@@ -1130,7 +1156,7 @@ private struct PlanView: View {
                         .foregroundStyle(CounselColors.tertiaryText)
                 }
                 .padding(14)
-                .background(.ultraThinMaterial.opacity(0.14))
+                .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .buttonStyle(.plain)
@@ -1138,7 +1164,7 @@ private struct PlanView: View {
         .padding(.horizontal, 24)
         .padding(.top, 10)
         .padding(.bottom, 10)
-        .background(.ultraThinMaterial.opacity(0.20))
+        .background(.ultraThinMaterial)
     }
 
     private var primaryButtonTitle: String {
@@ -1151,7 +1177,7 @@ private struct PlanView: View {
     // MARK: - Actions / Logic
 
     private var actions: [String] {
-        let out = PlanHeuristics.actions(from: input.bullets, timeframe: timeframe, priority: priority)
+        let out = PlanHeuristics.actions(from: record.organized, timeframe: timeframe, priority: priority)
         return out
     }
 
@@ -1161,16 +1187,30 @@ private struct PlanView: View {
     }
 
     private func commit() {
-        guard selectedActionIndex != nil else { return }
+        guard let idx = selectedActionIndex else { return }
+
+        // Save the commitment into history (source of truth)
+        record.planCommittedAction = actions[idx]
+        record.planTimeframe = timeframe.rawValue
+        record.planPriority = priority.rawValue
+        record.planCommittedAt = Date()
+
+        do {
+            try modelContext.save()
+        } catch {
+            // If you already have an error banner system, hook it here.
+            // For now: silent fail is acceptable for V1, but better to show an alert.
+            print("Failed to save plan commitment: \(error)")
+        }
 
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         withAnimation(.easeInOut(duration: 0.18)) { showCommitted = true }
 
-        // Keep it simple: small confirmation then pop
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
             if path.count > 0 { path.removeLast() }
         }
     }
+
 
     private func copySelectedAction() {
         guard let idx = selectedActionIndex else { return }
@@ -1368,7 +1408,7 @@ private struct CounselMenuSheet: View {
 
     var body: some View {
         ZStack {
-            CounselGradientBackground().ignoresSafeArea()
+            AppGradients.counsel.ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 10)
@@ -1408,7 +1448,7 @@ private struct CounselMenuSheet: View {
 
                 Text("Clear all data")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.red.opacity(0.88))
+                    .foregroundStyle(CounselColors.destructive)
                     .onTapGesture { onClearAll() }
 
                 Spacer()
@@ -1427,7 +1467,7 @@ private struct CounselTypeSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                CounselGradientBackground().ignoresSafeArea()
+                AppGradients.counsel.ignoresSafeArea()
 
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Type instead")
@@ -1437,7 +1477,7 @@ private struct CounselTypeSheet: View {
                     TextEditor(text: $text)
                         .scrollContentBackground(.hidden)
                         .padding(12)
-                        .background(.ultraThinMaterial.opacity(0.25))
+                        .background(.ultraThinMaterial)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .foregroundStyle(CounselColors.primaryText)
                         .frame(minHeight: 180)
@@ -1457,31 +1497,9 @@ private struct CounselTypeSheet: View {
     }
 }
 
-// MARK: - Design System
-
-private enum CounselColors {
-    static let primaryText = Color.white.opacity(0.92)
-    static let secondaryText = Color.white.opacity(0.62)
-    static let tertiaryText = Color.white.opacity(0.38)
-    static let icon = Color.white.opacity(0.65)
-    static let iconDisabled = Color.white.opacity(0.45)
-}
-
-private struct CounselGradientBackground: View {
-    var body: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color.black.opacity(0.98), location: 0.0),
-                .init(color: Color.black.opacity(0.90), location: 0.55),
-                .init(color: Color.black.opacity(0.98), location: 1.0)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-}
 
 #Preview {
     ContentView()
         .modelContainer(for: [HistoryRecord.self], inMemory: true)
 }
+
