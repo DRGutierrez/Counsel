@@ -1,10 +1,13 @@
 import SwiftUI
+import Combine
+
+// MARK: - Models
 
 private struct AdvisorResponseModel: Hashable {
     let summary: String
     let organized: [String]
     let nextStepPrompt: String
-    let memorySnippet: String? // when non-nil, show "I'll remember this"
+    let memorySnippet: String?
 }
 
 private struct HistoryItem: Identifiable, Hashable {
@@ -32,7 +35,6 @@ private final class AppStore: ObservableObject {
     private static func makeTitle(from input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "Untitled" }
-        // A simple, nice-looking title: first sentence-ish, truncated
         let firstLine = trimmed.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? trimmed
         return truncate(firstLine, limit: 42)
     }
@@ -45,6 +47,7 @@ private final class AppStore: ObservableObject {
 }
 
 // MARK: - App Routes
+
 private enum Route: Hashable {
     case reflections
     case history
@@ -52,12 +55,22 @@ private enum Route: Hashable {
     case response(AdvisorResponseModel)
 }
 
-
 // MARK: - Home State
+
 private enum HomeMode {
     case listening
     case didntCatchThat
 }
+
+// MARK: - Helpers
+
+private func formatTimestamp(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "MMM d · h:mm a"
+    return formatter.string(from: date)
+}
+
+// MARK: - Root
 
 struct ContentView: View {
     @State private var path = NavigationPath()
@@ -86,6 +99,7 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Processing
 
 private struct ProcessingView: View {
     @Binding var path: NavigationPath
@@ -100,10 +114,9 @@ private struct ProcessingView: View {
             VStack(spacing: 18) {
                 Spacer()
 
-                // Quiet pulse dot (subtle, not a loud spinner)
                 ProcessingPulse()
 
-                Text("Working on it...")
+                Text("Working on it…")
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(CounselColors.secondaryText)
 
@@ -116,9 +129,8 @@ private struct ProcessingView: View {
             guard !didNavigate else { return }
             didNavigate = true
 
-            // A short, intentional pause
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
-                // Replace processing route with response route
+                // Replace processing route with response route (nice transition)
                 if path.count > 0 { path.removeLast() }
                 path.append(Route.response(next))
             }
@@ -150,16 +162,15 @@ private struct ProcessingPulse: View {
 }
 
 // MARK: - Home (Sacred)
+
 private struct HomeView: View {
     @Binding var path: NavigationPath
     @EnvironmentObject private var store: AppStore
-
 
     @State private var mode: HomeMode = .listening
     @State private var showMenu = false
     @State private var showTypeSheet = false
     @State private var typedText = ""
-    
 
     var body: some View {
         ZStack {
@@ -169,7 +180,6 @@ private struct HomeView: View {
             VStack(spacing: 28) {
                 Spacer()
 
-                // Mic cluster
                 ZStack {
                     Circle()
                         .fill(.ultraThinMaterial)
@@ -182,7 +192,6 @@ private struct HomeView: View {
                         .opacity(mode == .listening ? 1.0 : 0.7)
                 }
 
-                // Copy block
                 VStack(spacing: 10) {
                     Text(primaryLine)
                         .font(.system(size: 22, weight: .regular))
@@ -225,7 +234,6 @@ private struct HomeView: View {
             }
             .padding(.horizontal, 24)
 
-            // Top-right menu + TEMP debug toggle
             VStack {
                 HStack {
                     Button {
@@ -252,7 +260,7 @@ private struct HomeView: View {
                 Spacer()
             }
         }
-        .navigationBarHidden(true) // keep Home sacred
+        .navigationBarHidden(true)
         .sheet(isPresented: $showMenu) {
             CounselMenuSheet(
                 onGoReflections: {
@@ -270,10 +278,15 @@ private struct HomeView: View {
         .sheet(isPresented: $showTypeSheet) {
             CounselTypeSheet(text: $typedText) {
                 showTypeSheet = false
+
                 let input = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !input.isEmpty else { return }
 
                 let model = AdvisorStub.generateResponse(from: input)
+
+                // ✅ FIX: actually save to history
+                store.addHistory(input: input, model: model)
+
                 typedText = ""
                 path.append(Route.processing(model))
             }
@@ -291,19 +304,18 @@ private struct HomeView: View {
     }
 }
 
+// MARK: - Advisor Stub
+
 private enum AdvisorStub {
     static func generateResponse(from input: String) -> AdvisorResponseModel {
-        // Keep it factual & non-prescriptive
         let summary = "You’re thinking through: “\(truncate(input, limit: 90))”"
 
-        // Very simple heuristic structure (good enough for a prototype)
         let organized: [String] = [
             "Key point: \(truncate(input, limit: 60))",
             "Constraint: unclear (worth clarifying)",
             "Next: decide what “done” looks like"
         ]
 
-        // Memory example: only remember when the user states a preference like "I prefer..."
         let memorySnippet: String? = extractPreference(input)
 
         return AdvisorResponseModel(
@@ -321,8 +333,6 @@ private enum AdvisorStub {
     }
 
     private static func extractPreference(_ input: String) -> String? {
-        // Ultra-simple: look for phrases that imply a lasting preference.
-        // You’ll replace this with real logic later.
         let lowered = input.lowercased()
         if lowered.contains("i prefer ") || lowered.contains("i like ") {
             return truncate(input, limit: 80)
@@ -331,10 +341,11 @@ private enum AdvisorStub {
     }
 }
 
-
 // MARK: - Reflections
+
 private struct ReflectionsView: View {
     @Binding var path: NavigationPath
+    @EnvironmentObject private var store: AppStore
 
     var body: some View {
         ZStack {
@@ -343,7 +354,6 @@ private struct ReflectionsView: View {
             VStack(spacing: 18) {
                 ReviewHeader(active: .reflections, path: $path)
 
-                // Placeholder content for now
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Check-ins")
                         .font(.system(size: 13, weight: .semibold))
@@ -363,9 +373,11 @@ private struct ReflectionsView: View {
     }
 }
 
-// MARK: - History
+// MARK: - History (REAL)
+
 private struct HistoryView: View {
     @Binding var path: NavigationPath
+    @EnvironmentObject private var store: AppStore
 
     var body: some View {
         ZStack {
@@ -379,9 +391,24 @@ private struct HistoryView: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(CounselColors.tertiaryText)
 
-                    ReviewRow(title: "Plan my week", subtitle: "Mon · 8:02 AM")
-                    ReviewRow(title: "Summarize meeting notes", subtitle: "Sun · 6:14 PM")
-                    ReviewRow(title: "Travel checklist", subtitle: "Sat · 10:40 AM")
+                    if store.history.isEmpty {
+                        Text("No history yet.")
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(CounselColors.tertiaryText)
+                            .padding(.top, 8)
+                    } else {
+                        ForEach(store.history) { item in
+                            Button {
+                                path.append(Route.response(item.model))
+                            } label: {
+                                ReviewRow(
+                                    title: item.title,
+                                    subtitle: formatTimestamp(item.createdAt)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
 
                     Spacer()
                 }
@@ -392,6 +419,8 @@ private struct HistoryView: View {
         .navigationBarHidden(true)
     }
 }
+
+// MARK: - Response Screen
 
 private struct AdvisorResponseView: View {
     @Binding var path: NavigationPath
@@ -406,7 +435,6 @@ private struct AdvisorResponseView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
 
-                    // Top bar (safe + quiet)
                     HStack {
                         Button {
                             if path.count > 0 { path.removeLast() }
@@ -423,7 +451,6 @@ private struct AdvisorResponseView: View {
                     }
                     .padding(.top, 6)
 
-                    // Summary
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Summary")
                             .font(.system(size: 13, weight: .semibold))
@@ -435,7 +462,6 @@ private struct AdvisorResponseView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    // Organized thoughts
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Organized thoughts")
                             .font(.system(size: 13, weight: .semibold))
@@ -456,7 +482,6 @@ private struct AdvisorResponseView: View {
                         }
                     }
 
-                    // Optional next step (make it feel like an action, not body copy)
                     Button {
                         // TODO: implement "turn into a plan"
                     } label: {
@@ -474,7 +499,6 @@ private struct AdvisorResponseView: View {
                     .buttonStyle(.plain)
                     .padding(.top, 4)
 
-                    // Memory acknowledgment (quiet)
                     if model.memorySnippet != nil, showMemoryAck {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -502,7 +526,7 @@ private struct AdvisorResponseView: View {
                     Spacer(minLength: 24)
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 40) // <- this is the key for breathing room
+                .padding(.top, 40)
                 .padding(.bottom, 24)
             }
         }
@@ -510,8 +534,8 @@ private struct AdvisorResponseView: View {
     }
 }
 
-
 // MARK: - Review Header (text-only nav)
+
 private enum ReviewTab {
     case home, reflections, history
 }
@@ -523,15 +547,11 @@ private struct ReviewHeader: View {
     var body: some View {
         HStack(spacing: 22) {
             navItem("Home", isActive: active == .home) {
-                // Pop to root (Home)
-                if path.count > 0 {
-                    path.removeLast()
-                }
+                if path.count > 0 { path.removeLast() }
             }
 
             navItem("Reflections", isActive: active == .reflections) {
                 if active != .reflections {
-                    // Ensure we don't stack duplicates endlessly
                     if path.count > 0 { path.removeLast() }
                     path.append(Route.reflections)
                 }
@@ -562,6 +582,7 @@ private struct ReviewHeader: View {
 }
 
 // MARK: - Reusable Row
+
 private struct ReviewRow: View {
     let title: String
     let subtitle: String
@@ -583,6 +604,7 @@ private struct ReviewRow: View {
 }
 
 // MARK: - Menu Sheet
+
 private struct CounselMenuSheet: View {
     let onGoReflections: () -> Void
     let onGoHistory: () -> Void
@@ -615,6 +637,7 @@ private struct CounselMenuSheet: View {
 }
 
 // MARK: - Type Sheet
+
 private struct CounselTypeSheet: View {
     @Binding var text: String
     let onSend: () -> Void
@@ -653,6 +676,7 @@ private struct CounselTypeSheet: View {
 }
 
 // MARK: - Design System
+
 private enum CounselColors {
     static let primaryText = Color.white.opacity(0.92)
     static let secondaryText = Color.white.opacity(0.62)
@@ -678,3 +702,4 @@ private struct CounselGradientBackground: View {
 #Preview {
     ContentView()
 }
+
