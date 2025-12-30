@@ -402,6 +402,7 @@ private struct HomeView: View {
 
     @State private var mode: HomeMode = .listening
     @State private var showMenu = false
+    @State private var showPaywall = false
     @State private var showTypeSheet = false
     @State private var typedText = ""
 
@@ -467,19 +468,34 @@ private struct HomeView: View {
             }
             .padding(.horizontal, 24)
 
-            // Top-right menu + TEMP debug toggle
+            // Top bar
             VStack {
                 HStack {
+                    Button { showPaywall = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "crown")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Pro")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(CounselColors.tertiaryText)
+                        .padding(.leading, 16)
+                        .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+
+                    #if DEBUG
                     Button {
                         mode = (mode == .listening) ? .didntCatchThat : .listening
                     } label: {
                         Text(mode == .listening ? "Test error" : "Back to listen")
                             .font(.system(size: 13, weight: .regular))
                             .foregroundStyle(CounselColors.tertiaryText)
-                            .padding(.leading, 16)
+                            .padding(.leading, 10)
                             .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
+                    #endif
 
                     Spacer()
 
@@ -497,6 +513,10 @@ private struct HomeView: View {
         .navigationBarHidden(true)
         .sheet(isPresented: $showMenu) {
             CounselMenuSheet(
+                onGoPro: {
+                    showMenu = false
+                    showPaywall = true
+                },
                 onGoReflections: {
                     showMenu = false
                     path.append(Route.reflections)
@@ -514,7 +534,13 @@ private struct HomeView: View {
             .presentationDetents([.height(270)])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showTypeSheet) {
+        
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .presentationDetents([.height(420), .large])
+                .presentationDragIndicator(.visible)
+        }
+.sheet(isPresented: $showTypeSheet) {
             CounselTypeSheet(text: $typedText) {
                 showTypeSheet = false
 
@@ -930,149 +956,227 @@ private struct PlanView: View {
 
     @State private var timeframe: PlanTimeframe = .thisWeek
     @State private var priority: PlanPriority = .important
-    @State private var checked: Set<Int> = []
+
+    // Single-choice selection (radio)
+    @State private var selectedActionIndex: Int? = nil
+
     @State private var showCopied: Bool = false
+    @State private var showCommitted: Bool = false
 
     var body: some View {
         ZStack {
             CounselGradientBackground().ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
 
-                    HStack {
-                        Button {
-                            if path.count > 0 { path.removeLast() }
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(CounselColors.tertiaryText)
-                                .padding(.vertical, 8)
-                                .padding(.trailing, 6)
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        Button(showCopied ? "Copied" : "Copy top") {
-                            copyTopAction()
-                        }
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.top, 6)
-
-                    Text("Plan")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(CounselColors.tertiaryText)
-
-                    Text(input.summary)
-                        .font(.system(size: 26, weight: .regular))
-                        .foregroundStyle(CounselColors.primaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Settings")
-                            .font(.system(size: 13, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Commit the plan")
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(CounselColors.tertiaryText)
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            planPicker(title: "Timeframe", selection: $timeframe)
-                            planPicker(title: "Priority", selection: $priority)
-                        }
-                        .padding(14)
-                        .background(.ultraThinMaterial.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        Text(input.summary)
+                            .font(.system(size: 28, weight: .regular))
+                            .foregroundStyle(CounselColors.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Next actions")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(CounselColors.tertiaryText)
+                    settingsCard
 
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
-                                Button {
-                                    toggle(idx)
-                                } label: {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        Image(systemName: checked.contains(idx) ? "checkmark.circle.fill" : "circle")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(checked.contains(idx) ? CounselColors.primaryText : CounselColors.tertiaryText)
-
-                                        Text(action)
-                                            .font(.system(size: 20, weight: .regular))
-                                            .foregroundStyle(CounselColors.primaryText.opacity(0.92))
-                                            .fixedSize(horizontal: false, vertical: true)
-
-                                        Spacer()
-                                    }
-                                    .padding(.vertical, 10)
-                                }
-                                .buttonStyle(.plain)
-
-                                if idx != actions.count - 1 {
-                                    Divider().opacity(0.10)
-                                }
-                            }
-                        }
-                        .padding(14)
-                        .background(.ultraThinMaterial.opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    }
-
-                    if checked.count > 0 {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Nice. Done for now?")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(CounselColors.tertiaryText)
-
-                            Button {
-                                // Just pop back. Simple + clean.
-                                if path.count > 0 { path.removeLast() }
-                            } label: {
-                                HStack {
-                                    Text("Close")
-                                        .font(.system(size: 18, weight: .regular))
-                                        .foregroundStyle(CounselColors.secondaryText)
-                                    Spacer()
-                                    Image(systemName: "xmark")
-                                        .foregroundStyle(CounselColors.tertiaryText)
-                                }
-                                .padding(14)
-                                .background(.ultraThinMaterial.opacity(0.18))
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    nextMoveCard
 
                     Spacer(minLength: 24)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 40)
-                .padding(.bottom, 24)
+                .padding(.bottom, 90) // leave room for bottom CTA
             }
         }
         .navigationBarHidden(true)
+        .safeAreaInset(edge: .bottom) {
+            bottomCTA
+        }
     }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Button {
+                if path.count > 0 { path.removeLast() }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(CounselColors.tertiaryText)
+                    .padding(.vertical, 8)
+                    .padding(.trailing, 6)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(showCopied ? "Copied" : "Copy action") {
+                copySelectedAction()
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(showCopied ? CounselColors.secondaryText : CounselColors.primaryText)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(.ultraThinMaterial.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .buttonStyle(.plain)
+            .disabled(selectedActionIndex == nil)
+            .opacity(selectedActionIndex == nil ? 0.45 : 1.0)
+        }
+    }
+
+    // MARK: - Cards
+
+    private var settingsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CounselColors.tertiaryText)
+
+            VStack(alignment: .leading, spacing: 10) {
+                planPicker(title: "Timeframe", selection: $timeframe)
+                planPicker(title: "Priority", selection: $priority)
+            }
+            .padding(14)
+            .background(.ultraThinMaterial.opacity(0.18))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    private var nextMoveCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose the move that unlocks progress")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CounselColors.tertiaryText)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(actions.enumerated()), id: \.offset) { idx, action in
+                    Button {
+                        select(idx)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: selectedActionIndex == idx ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(selectedActionIndex == idx ? CounselColors.primaryText : CounselColors.tertiaryText)
+
+                            Text(action)
+                                .font(.system(size: 18, weight: .regular))
+                                .foregroundStyle(CounselColors.primaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.plain)
+
+                    if idx != actions.count - 1 {
+                        Divider().opacity(0.10)
+                    }
+                }
+            }
+            .padding(14)
+            .background(.ultraThinMaterial.opacity(0.18))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    // MARK: - Bottom CTA
+
+    private var bottomCTA: some View {
+        VStack(spacing: 10) {
+            if showCommitted {
+                Text("Nice. You’ve locked in your next step.")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CounselColors.tertiaryText)
+                    .transition(.opacity)
+            }
+
+            Button {
+                commit()
+            } label: {
+                HStack {
+                    Text(primaryButtonTitle)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(selectedActionIndex == nil ? CounselColors.secondaryText : .black)
+                    Spacer()
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(selectedActionIndex == nil ? CounselColors.tertiaryText : .black)
+                }
+                .padding(14)
+                .background(selectedActionIndex == nil ? .ultraThinMaterial.opacity(0.18) : CounselColors.primaryText)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(selectedActionIndex == nil)
+            .opacity(selectedActionIndex == nil ? 0.65 : 1.0)
+
+            Button {
+                // Success-driven exit, not "Close"
+                if path.count > 0 { path.removeLast() }
+            } label: {
+                HStack {
+                    Text("Done for now")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(CounselColors.secondaryText)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .foregroundStyle(CounselColors.tertiaryText)
+                }
+                .padding(14)
+                .background(.ultraThinMaterial.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(.ultraThinMaterial.opacity(0.20))
+    }
+
+    private var primaryButtonTitle: String {
+        if let idx = selectedActionIndex {
+            return "Commit: \(actions[idx])"
+        }
+        return "Choose a next action"
+    }
+
+    // MARK: - Actions / Logic
 
     private var actions: [String] {
         let out = PlanHeuristics.actions(from: input.bullets, timeframe: timeframe, priority: priority)
         return out
     }
 
-    private func toggle(_ idx: Int) {
-        if checked.contains(idx) { checked.remove(idx) }
-        else { checked.insert(idx) }
+    private func select(_ idx: Int) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        selectedActionIndex = idx
     }
 
-    private func copyTopAction() {
-        guard let first = actions.first else { return }
-        UIPasteboard.general.string = first
+    private func commit() {
+        guard selectedActionIndex != nil else { return }
+
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.easeInOut(duration: 0.18)) { showCommitted = true }
+
+        // Keep it simple: small confirmation then pop
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+            if path.count > 0 { path.removeLast() }
+        }
+    }
+
+    private func copySelectedAction() {
+        guard let idx = selectedActionIndex else { return }
+        UIPasteboard.general.string = actions[idx]
         showCopied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             showCopied = false
         }
     }
@@ -1083,7 +1187,7 @@ private struct PlanView: View {
     ) -> some View where T.RawValue == String {
         HStack {
             Text(title)
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(CounselColors.secondaryText)
 
             Spacer()
@@ -1257,6 +1361,7 @@ private struct ReviewRow: View {
 // MARK: - Menu Sheet
 
 private struct CounselMenuSheet: View {
+    let onGoPro: () -> Void
     let onGoReflections: () -> Void
     let onGoHistory: () -> Void
     let onClearAll: () -> Void
@@ -1267,6 +1372,24 @@ private struct CounselMenuSheet: View {
 
             VStack(alignment: .leading, spacing: 18) {
                 Spacer(minLength: 10)
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Counsel Pro")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(CounselColors.primaryText)
+                        Text("Unlock unlimited + upcoming voice & AI.")
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(CounselColors.tertiaryText)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(CounselColors.tertiaryText)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { onGoPro() }
+
+                Divider().opacity(0.12)
 
                 Text("Reflections")
                     .font(.system(size: 22, weight: .semibold))
