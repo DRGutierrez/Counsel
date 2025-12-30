@@ -53,6 +53,7 @@ private enum Route: Hashable {
     case history
     case processing(AdvisorResponseModel)
     case response(AdvisorResponseModel)
+    case reflectionDetail(ReflectionItem)
 }
 
 // MARK: - Home State
@@ -85,6 +86,8 @@ struct ContentView: View {
                     case .reflections:
                         ReflectionsView(path: $path)
                             .environmentObject(store)
+                    case .reflectionDetail(let item):
+                        ReflectionDetailView(path: $path, item: item)
                     case .history:
                         HistoryView(path: $path)
                             .environmentObject(store)
@@ -383,38 +386,31 @@ private struct HistoryView: View {
         ZStack {
             CounselGradientBackground().ignoresSafeArea()
 
-            VStack(spacing: 18) {
-                ReviewHeader(active: .history, path: $path)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Recent")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CounselColors.tertiaryText)
 
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Recent")
-                        .font(.system(size: 13, weight: .semibold))
+                if store.history.isEmpty {
+                    Text("Nothing yet.")
+                        .font(.system(size: 18, weight: .regular))
                         .foregroundStyle(CounselColors.tertiaryText)
-
-                    if store.history.isEmpty {
-                        Text("No history yet.")
-                            .font(.system(size: 18, weight: .regular))
-                            .foregroundStyle(CounselColors.tertiaryText)
-                            .padding(.top, 8)
-                    } else {
-                        ForEach(store.history) { item in
-                            Button {
-                                path.append(Route.response(item.model))
-                            } label: {
-                                ReviewRow(
-                                    title: item.title,
-                                    subtitle: formatTimestamp(item.createdAt)
-                                )
-                            }
-                            .buttonStyle(.plain)
+                        .padding(.top, 8)
+                } else {
+                    ForEach(store.history) { item in
+                        Button {
+                            path.append(Route.response(item.model))
+                        } label: {
+                            ReviewRow(title: item.title, subtitle: formatTimestamp(item.createdAt))
                         }
+                        .buttonStyle(.plain)
                     }
-
-                    Spacer()
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 6)
+
+                Spacer()
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
         }
         .navigationBarHidden(true)
     }
